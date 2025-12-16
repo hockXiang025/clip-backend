@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+flask
+firebase-admin
+google-cloud-storage
+google-cloud-firestore
+torch
+numpy
+ftfy
+regex
+tqdm
+requests
+Pillow
+python-dotenv
+git+https://github.com/openai/CLIP.git
