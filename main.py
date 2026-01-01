@@ -2,7 +2,7 @@ import os
 import io
 import re
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import Optional, List, Dict, Any
 import random
 
 import torch
@@ -12,6 +12,9 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from difflib import get_close_matches
 from urllib.parse import quote
+from contextlib import asynccontextmanager
+from event_rules import event_rules
+from colors_rules import COLOR_FAMILIES, COLOR_COMPATIBILITY, COLOR_NORMALIZATION
 
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -35,927 +38,115 @@ cred = credentials.Certificate(FIREBASE_CREDENTIALS_PATH)
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# -------------------- EVENT RULES --------------------
-# This dictionary combines Malay, Chinese, and general events
-event_rules = {
 
-    # ---------------- MALAY CULTURAL EVENTS ----------------
-    "malay_wedding": {
-        "type": "traditional",
-        "allowed_styles": ["traditional", "semi-formal", "formal"],
-        "colors": ["gold", "green", "blue", "purple"],
-        "traditional": {
-            "female": ["baju kurung", "kebaya"],
-            "male": ["baju melayu"]
-        },
-        "style_categories": {
-            "semi-formal": {
-                "female": {
-                    "top": ["blouse"],
-                    "bottom": ["long skirt", "palazzo pants"]
-                },
-                "male": {
-                    "top": ["long-sleeve shirt"],
-                    "bottom": ["trousers"]
-                }
-            },
-            "formal": {
-                "female": {
-                    "one_piece": ["evening gown"]
-                },
-                "male": {
-                    "top": ["dress shirt"],
-                    "bottom": ["trousers"]
-                }
-            }
-        }
-    },
-
-    "aqiqah": {
-        "type": "traditional",
-        "allowed_styles": ["traditional", "modest"],
-        "colors": ["soft", "neutral", "pastel"],
-        "traditional": {
-            "female": ["baju kurung", "kebaya"],
-            "male": ["baju melayu"]
-        },
-        "style_categories": {
-            "modest": {
-                "female": {
-                    "top": ["long-sleeve blouse"],
-                    "bottom": ["long skirt"]
-                },
-                "male": {
-                    "top": ["long-sleeve shirt"],
-                    "bottom": ["trousers"]
-                }
-            }
-        }
-    },
-
-    "hari_raya_aidilfitri": {
-        "type": "traditional",
-        "allowed_styles": ["traditional", "modest"],
-        "colors": ["bright", "green", "yellow", "blue", "pink", "purple"],
-        "traditional": {
-            "female": ["baju kurung", "kebaya"],
-            "male": ["baju melayu"]
-        },
-        "style_categories": {
-            "modest": {
-                "female": {
-                    "top": ["long-sleeve blouse"],
-                    "bottom": ["long skirt"]
-                },
-                "male": {
-                    "top": ["collared shirt"],
-                    "bottom": ["trousers"]
-                }
-            }
-        }
-    },
-
-    "circumcision_ceremony": {
-        "type": "general",
-        "allowed_styles": ["casual", "modest"],
-        "colors": ["neutral", "blue", "white"],
-        "style_categories": {
-            "casual": {
-                "female": {
-                    "top": ["t-shirt"],
-                    "bottom": ["pants"]
-                },
-                "male": {
-                    "top": ["t-shirt"],
-                    "bottom": ["pants"]
-                }
-            },
-            "modest": {
-                "female": {
-                    "top": ["tunic"],
-                    "bottom": ["long skirt"]
-                },
-                "male": {
-                    "top": ["long-sleeve top"],
-                    "bottom": ["trousers"]
-                }
-            }
-        }
-    },
-
-    "malay_engagement_ceremony": {
-        "type": "traditional",
-        "allowed_styles": ["traditional", "semi-formal"],
-        "colors": ["jewel tone", "gold", "soft"],
-        "traditional": {
-            "female": ["baju kurung", "kebaya"],
-            "male": ["baju melayu"]
-        },
-        "style_categories": {
-            "semi-formal": {
-                "female": {
-                    "top": ["blouse"],
-                    "bottom": ["long skirt"]
-                },
-                "male": {
-                    "top": ["dress shirt"],
-                    "bottom": ["trousers"]
-                }
-            }
-        }
-    },
-
-    "majlis_rasmi_awards_ceremony": {
-        "type": "general",
-        "allowed_styles": ["formal"],
-        "colors": ["dark", "neutral", "navy", "black"],
-        "style_categories": {
-            "formal": {
-                "female": {"one_piece": ["evening gown"]},
-                "male": {
-                    "top": ["dress shirt"],
-                    "bottom": ["trousers"]
-                }
-            }
-        }
-    },
-
-    # ---------------- CHINESE CULTURAL EVENTS ----------------
-    "chinese_engagement_ceremony": {
-        "type": "traditional",
-        "allowed_styles": ["traditional", "semi-formal"],
-        "colors": ["red", "soft", "gold"],
-        "traditional": {
-            "female": ["cheongsam", "qipao"],
-            "male": ["tang suit"]
-        },
-        "style_categories": {
-            "semi-formal": {
-                "female": {
-                    "one_piece": ["dress"]
-                },
-                "male": {
-                    "top": ["collared shirt"],
-                    "bottom": ["trousers"]
-                }
-            }
-        }
-    },
-
-    "chinese_wedding": {
-        "type": "traditional",
-        "allowed_styles": ["traditional", "formal"],
-        "colors": ["red", "gold"],
-        "traditional": {
-            "female": ["cheongsam", "qipao"],
-            "male": ["tang suit"]
-        },
-        "style_categories": {
-            "formal": {
-                "female": {"one_piece": ["evening dress"]},
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["trousers"]
-                }
-            }
-        }
-    },
-
-    "baby_shower": {
-        "type": "traditional",
-        "allowed_styles": ["traditional", "festive"],
-        "colors": ["red", "pink", "soft", "gold"],
-        "traditional": {
-            "female": ["cheongsam", "qipao"],
-            "male": ["tang suit"]
-        },
-        "style_categories": {
-            "festive": {
-                "female": {"one_piece": ["dress"]},
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["trousers"]
-                }
-            }
-        }
-    },
-
-    "chinese_new_year": {
-        "type": "traditional",
-        "allowed_styles": ["traditional", "casual"],
-        "colors": ["red", "gold", "orange", "bright"],
-        "traditional": {
-            "female": ["cheongsam", "qipao"],
-            "male": ["tang suit"]
-        },
-        "style_categories": {
-            "casual": {
-                "female": {
-                    "top": ["blouse"],
-                    "bottom": ["skirt"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["pants"]
-                }
-            }
-        }
-    },
-
-    "mid_autumn_festival": {
-        "type": "general",
-        "allowed_styles": ["semi-formal", "casual"],
-        "colors": ["red", "gold", "green", "pastel"],
-        "style_categories": {
-            "semi-formal": {
-                "female": {
-                    "one_piece": ["dress"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["pants"]
-                }
-            },
-            "casual": {
-                "female": {
-                    "top": ["blouse", "t-shirt"],
-                    "bottom": ["skirt", "jeans"]
-                },
-                "male": {
-                    "top": ["t-shirt"],
-                    "bottom": ["jeans"]
-                }
-            }
-        }
-    },
-
-    "dragon_boat_festival": {
-        "type": "traditional",
-        "allowed_styles": ["traditional", "casual", "festive"],
-        "colors": ["green", "white", "red", "gold"],
-        "traditional": {
-            "female": ["cheongsam", "qipao"],
-            "male": ["tang suit"]
-        },
-        "style_categories": {
-            "casual": {
-                "female": {
-                    "top": ["t-shirt", "blouse"],
-                    "bottom": ["jeans", "skirt"]
-                },
-                "male": {
-                    "top": ["t-shirt"],
-                    "bottom": ["jeans"]
-                }
-            },
-            "festive": {
-                "female": {
-                    "one_piece": ["dress"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["trousers"]
-                }
-            }
-        }
-    },
-
-    "chinese_birthday": {
-        "type": "general",
-        "allowed_styles": ["casual", "semi-formal", "festive"],
-        "colors": ["bright", "red", "yellow", "pastel"],
-        "style_categories": {
-            "casual": {
-                "female": {
-                    "top": ["t-shirt", "blouse"],
-                    "bottom": ["jeans", "skirt"]
-                },
-                "male": {
-                    "top": ["t-shirt"],
-                    "bottom": ["jeans"]
-                }
-            },
-            "semi-formal": {
-                "female": {
-                    "one_piece": ["dress"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["pants"]
-                }
-            },
-            "festive": {
-                "female": {
-                    "one_piece": ["dress", "jumpsuit"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["trousers"]
-                }
-            }
-        }
-    },
-
-    "temple_prayer_ceremony": {
-        "type": "general",
-        "allowed_styles": ["casual", "modest"],
-        "colors": ["soft", "white", "neutral"],
-        "style_categories": {
-            "casual": {
-                "female": {
-                    "top": ["blouse"],
-                    "bottom": ["long skirt"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["pants"]
-                }
-            },
-            "modest": {
-                "female": {
-                    "top": ["tunic"],
-                    "bottom": ["long skirt"]
-                },
-                "male": {
-                    "top": ["long-sleeve top"],
-                    "bottom": ["trousers"]
-                }
-            }
-        }
-    },
-
-    "chinese_funeral": {
-        "type": "general",
-        "allowed_styles": ["formal"],
-        "colors": ["white", "black", "neutral"],
-        "style_categories": {
-            "formal": {
-                "female": {
-                    "top": ["blouse", "long-sleeve top"],
-                    "bottom": ["long skirt", "trousers"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["trousers"]
-                }
-            }
-        }
-    },
-
-    # ---------------- INDIAN CULTURAL EVENTS (Malaysia) ----------------
-    "deepavali": {
-        "type": "traditional",
-        "allowed_styles": ["traditional", "festive"],
-        "colors": ["bright", "gold", "red", "orange"],
-        "traditional": {
-            "female": ["saree","salwar kameez"],
-            "male": ["kurta", "dhoti"]
-        },
-        "style_categories": {
-            "festive": {
-                "female": {
-                    "one_piece": ["dress"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["trousers"]
-                }
-            }
-        }
-    },
-
-    "thaipusam": {
-        "type": "traditional",
-        "allowed_styles": ["traditional", "modest"],
-        "colors": ["white", "yellow", "red"],
-        "traditional": {
-            "female": ["saree", "salwar kameez"],
-            "male": ["veshti", "kurta"]
-        },
-        "style_categories": {
-            "modest": {
-                "female": {
-                    "top": ["tunic"],
-                    "bottom": ["long skirt"]
-                },
-                "male": {
-                    "top": ["long-sleeve top"],
-                    "bottom": ["trousers"]
-                }
-            }
-        }
-    },
-
-    "pongal": {
-        "type": "traditional",
-        "allowed_styles": ["traditional", "casual"],
-        "colors": ["white", "yellow", "orange"],
-        "traditional": {
-            "female": ["pavadai", "saree"],
-            "male": ["veshti", "kurta"]
-        },
-        "style_categories": {
-            "casual": {
-                "female": {
-                    "top": ["blouse"],
-                    "bottom": ["long skirt"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["pants"]
-                }
-            }
-        }
-    },
-
-    # ---------------- GENERAL EVENTS ----------------
-    "work_at_workplace": {
-        "type": "general",
-        "allowed_styles": ["formal", "semi-formal", "smart-casual"],
-        "colors": ["neutral", "dark", "black", "navy", "grey"],
-        "style_categories": {
-            "formal": {
-                "female": {
-                    "top": ["blouse", "long-sleeve top"],
-                    "bottom": ["trousers", "long skirt"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["trousers"]
-                }
-            },
-            "semi-formal": {
-                "female": {
-                    "top": ["blouse"],
-                    "bottom": ["trousers", "skirt"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["trousers"]
-                }
-            },
-            "smart-casual": {
-                "female": {
-                    "top": ["blouse", "tunic"],
-                    "bottom": ["pants"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["pants"]
-                }
-            }
-        }
-    },
-    
-    "corporate_event": {
-        "type": "general",
-        "allowed_styles": ["formal", "semi-formal"],
-        "colors": ["neutral", "dark", "black", "navy"],
-        "style_categories": {
-            "formal": {
-                "female": {
-                    "top": ["blouse"],
-                    "bottom": ["trousers", "long skirt"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["trousers"]
-                }
-            },
-            "semi-formal": {
-                "female": {
-                    "top": ["blouse"],
-                    "bottom": ["pants"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["pants"]
-                }
-            }
-        }
-    },
-
-    "government_office": {
-        "type": "general",
-        "allowed_styles": ["formal"],
-        "colors": ["neutral", "navy", "black"],
-        "style_categories": {
-            "formal": {
-                "female": {
-                    "top": ["blouse", "long-sleeve top"],
-                    "bottom": ["long skirt", "trousers"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["trousers"]
-                }
-            }
-        }
-    },
-
-    "hospital_visit": {
-        "type": "general",
-        "allowed_styles": ["comfortable"],
-        "colors": ["soft", "neutral"],
-        "style_categories": {
-            "comfortable": {
-                "female": {
-                    "top": ["t-shirt", "tunic"],
-                    "bottom": ["pants", "long skirt"]
-                },
-                "male": {
-                    "top": ["t-shirt"],
-                    "bottom": ["pants"]
-                }
-            }
-        }
-    },
-
-    "western_birthday_party": {
-        "type": "general",
-        "allowed_styles": ["casual", "semi-formal", "festive"],
-        "colors": ["bright", "soft", "pastel", "pink", "blue"],
-        "style_categories": {
-            "casual": {
-                "female": {
-                    "top": ["t-shirt", "blouse"],
-                    "bottom": ["jeans", "skirt"]
-                },
-                "male": {
-                    "top": ["t-shirt"],
-                    "bottom": ["jeans"]
-                }
-            },
-            "semi-formal": {
-                "female": {
-                    "one_piece": ["dress"],
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["pants"]
-                }
-            },
-            "festive": {
-                "female": {
-                    "one_piece": ["dress", "jumpsuit"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["trousers"]
-                }
-            }
-        }
-    },
-
-    "exercising": {
-        "type": "general",
-        "allowed_styles": ["sporty", "casual"],
-        "colors": ["bright", "dark", "black", "blue"],
-        "style_categories": {
-            "sporty": {
-                "female": {
-                    "top": ["t-shirt"],
-                    "bottom": ["pants"]
-                },
-                "male": {
-                    "top": ["t-shirt"],
-                    "bottom": ["pants"]
-                }
-            },
-            "casual": {
-                "female": {
-                    "top": ["t-shirt"],
-                    "bottom": ["pants"]
-                },
-                "male": {
-                    "top": ["t-shirt"],
-                    "bottom": ["pants"]
-                }
-            }
-        }
-    },
-
-    "climbing": {
-        "type": "general",
-        "allowed_styles": ["sporty"],
-        "colors": ["neutral", "dark"],
-        "style_categories": {
-            "sporty": {
-                "female": {
-                    "top": ["t-shirt"],
-                    "bottom": ["pants", "jeans"]
-                },
-                "male": {
-                    "top": ["t-shirt"],
-                    "bottom": ["pants"]
-                }
-            }
-        }
-    },
-
-    "casual_outing": {
-        "type": "general",
-        "allowed_styles": ["casual"],
-        "colors": ["bright", "soft", "pastel"],
-        "style_categories": {
-            "casual": {
-                "female": {
-                    "top": ["t-shirt", "blouse"],
-                    "bottom": ["jeans", "skirt"]
-                },
-                "male": {
-                    "top": ["t-shirt"],
-                    "bottom": ["jeans"]
-                }
-            }
-        }
-    },
-
-    "dating": {
-        "type": "general",
-        "allowed_styles": ["casual", "semi-formal", "elegant"],
-        "colors": ["soft", "neutral", "pastel", "black", "maroon"],
-        "style_categories": {
-            "casual": {
-                "female": {
-                    "top": ["blouse"],
-                    "bottom": ["jeans"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["jeans"]
-                }
-            },
-            "semi-formal": {
-                "female": {
-                    "one_piece": ["dress"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["pants"]
-                }
-            },
-            "elegant": {
-                "female": {
-                    "one_piece": ["maxi dress"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["trousers"]
-                }
-            }
-        }
-    },
-
-    "formal_dinner": {
-        "type": "general",
-        "allowed_styles": ["formal", "casual"],
-        "colors": ["dark", "neutral", "black", "navy", "maroon"],
-        "style_categories": {
-            "formal": {
-                "female": {
-                    "one_piece": ["gown"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["trousers"]
-                }
-            },
-            "casual": {
-                "female": {
-                    "one_piece": ["dress"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["pants"]
-                }
-            }
-        }
-    },
-
-    "stay_at_home": {
-        "type": "general",
-        "allowed_styles": ["casual", "comfortable"],
-        "colors": ["soft", "neutral", "pastel"],
-        "style_categories": {
-            "casual": {
-                "female": {
-                    "top": ["t-shirt"],
-                    "bottom": ["pants"]
-                },
-                "male": {
-                    "top": ["t-shirt"],
-                    "bottom": ["pants"]
-                }
-            },
-            "comfortable": {
-                "female": {
-                    "top": ["t-shirt"],
-                    "bottom": ["pants"]
-                },
-                "male": {
-                    "top": ["t-shirt"],
-                    "bottom": ["pants"]
-                }
-            }
-        }
-    },
-
-    "work_from_home": {
-        "type": "general",
-        "allowed_styles": ["casual", "smart-casual"],
-        "colors": ["neutral", "soft", "blue", "grey"],
-        "style_categories": {
-            "casual": {
-                "female": {
-                    "top": ["t-shirt"],
-                    "bottom": ["pants"]
-                },
-                "male": {
-                    "top": ["t-shirt"],
-                    "bottom": ["pants"]
-                }
-            },
-            "smart-casual": {
-                "female": {
-                    "top": ["blouse"],
-                    "bottom": ["pants"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["pants"]
-                }
-            }
-        }
-    },
-
-    "travelling": {
-        "type": "general",
-        "allowed_styles": ["casual", "comfortable", "sporty"],
-        "colors": ["neutral", "dark", "soft"],
-        "style_categories": {
-            "casual": {
-                "female": {
-                    "top": ["t-shirt"],
-                    "bottom": ["jeans"]
-                },
-                "male": {
-                    "top": ["t-shirt"],
-                    "bottom": ["jeans"]
-                }
-            },
-            "comfortable": {
-                "female": {
-                    "top": ["t-shirt"],
-                    "bottom": ["pants"]
-                },
-                "male": {
-                    "top": ["t-shirt"],
-                    "bottom": ["pants"]
-                }
-            },
-            "sporty": {
-                "female": {
-                    "top": ["t-shirt"],
-                    "bottom": ["pants"]
-                },
-                "male": {
-                    "top": ["t-shirt"],
-                    "bottom": ["pants"]
-                }
-            }
-        }
-    },
-
-    "public_holiday_gathering": {
-        "type": "general",
-        "allowed_styles": ["festive", "semi-formal"],
-        "colors": ["bright", "red", "yellow", "green", "blue"],
-        "style_categories": {
-            "festive": {
-                "female": {
-                    "one_piece": ["dress"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["trousers"]
-                }
-            },
-            "semi-formal": {
-                "female": {
-                    "one_piece": ["dress"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["pants"]
-                }
-            }
-        }
-    },
-
-    "university": {
-        "type": "general",
-        "allowed_styles": ["casual", "smart-casual", "modest"],
-        "colors": ["neutral", "soft", "dark", "blue"],
-        "style_categories": {
-            "casual": {
-                "female": {
-                    "top": ["t-shirt"],
-                    "bottom": ["jeans"]
-                },
-                "male": {
-                    "top": ["t-shirt"],
-                    "bottom": ["jeans"]
-                }
-            },
-            "smart-casual": {
-                "female": {
-                    "top": ["blouse"],
-                    "bottom": ["pants"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["pants"]
-                }
-            },
-            "modest": {
-                "female": {
-                    "top": ["tunic"],
-                    "bottom": ["long skirt"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["trousers"]
-                }
-            }
-        }
-    },
-
-    "western_wedding": {
-        "type": "general",
-        "allowed_styles": ["formal", "semi-formal", "elegant"],
-        "colors": ["pastel", "soft", "neutral", "dark"],
-        "style_categories": {
-            "formal": {
-                "female": {
-                    "one_piece": ["gown"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["trousers"]
-                }
-            },
-            "semi-formal": {
-                "female": {
-                    "one_piece": ["dress"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["pants"]
-                }
-            },
-            "elegant": {
-                "female": {
-                    "one_piece": ["maxi dress"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["trousers"]
-                }
-            }
-        }
-    },
-
-    "open_house": {
-        "type": "general",
-        "allowed_styles": ["festive", "semi-formal"],
-        "colors": ["bright", "soft"],
-        "style_categories": {
-            "festive": {
-                "female": {
-                    "one_piece": ["dress"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["trousers"]
-                }
-            },
-            "semi-formal": {
-                "female": {
-                    "one_piece": ["dress"]
-                },
-                "male": {
-                    "top": ["shirt"],
-                    "bottom": ["pants"]
-                }
-            }
-        }
-    }
+WEATHER_RULES = {
+    "hot": ["light", "short-sleeve"],
+    "rainy": ["long-sleeve"],
+    "cold": ["long-sleeve"],
+    "normal": []     
 }
 
+FREEZING_FORCE_CATEGORIES = {
+    "top": ["thermal_top", "sweater", "coat"],
+    "bottom": ["thermal_bottom", "long_pants"],
+    "one_piece": ["winter_coat"]
+}
+
+EVENT_TO_UPLOAD_CATEGORY = {
+    # ---------- ONE PIECE ----------
+    "dress": "dress",
+    "gown": "gown",
+    "maxi dress": "maxi dress",
+    "jumpsuit": "jumpsuit",
+    "baju kurung": "baju kurung",
+    "baju kebaya": "baju kebaya",
+    "baju melayu": "baju melayu",
+    "cheongsam": "cheongsam",
+    "qipao": "qipao",
+    "saree": "saree",
+    "salwar kameez": "salwar kameez",
+    "pavadai": "pavadai",
+    "evening gown": "gown",
+    "evening dress": "dress",
+
+    # ---------- TOP ----------
+    "t-shirt": "t-shirt",
+    "blouse": "blouse",
+    "shirt": "shirt",
+    "long-sleeve t-shirt": "t-shirt",
+    "long-sleeve shirt": "shirt",
+    "long-sleeve blouse": "blouse",
+    "tunic": "tunic",
+    "kurta": "kurta",
+    "dress shirt": "shirt",
+    "tang suit": "tang suit",
+    "collared shirt": "shirt",
+
+    # ---------- BOTTOM ----------
+    "pants": "pants",
+    "trousers": "trousers",
+    "skirt": "skirt",
+    "jeans": "jeans",
+    "palazzo pants": "palazzo pants",
+    "long skirt": "long skirt",
+    "dhoti": "dhoti",
+    "veshti": "veshti"
+}
+
+CLIP_CANONICAL = {
+    # Malay
+    "baju kurung": "long-sleeve loose dress",
+    "baju kebaya": "fitted traditional blouse and long skirt",
+    "baju melayu": "long-sleeve traditional tunic and trousers",
+
+    # Chinese
+    "qipao": "fitted high-collar dress",
+    "cheongsam": "fitted high-collar dress",
+    "tang suit": "traditional jacket with mandarin collar",
+
+    # Indian
+    "saree": "draped long fabric dress",
+    "salwar kameez": "long tunic with loose trousers",
+    "kurta": "long tunic",
+    "veshti": "wrapped long skirt",
+    "dhoti": "wrapped long garment",
+    "pavadai": "traditional long skirt",
+
+    # others
+    "evening gown": "evening gown",
+    "evening dress": "evening dress",
+    "dress": "dress",
+    "gown": "gown",
+    "maxi dress": "maxi dress",
+    "blouse": "blouse",
+    "shirt": "shirt",
+    "t-shirt": "t-shirt",
+    "tunic": "tunic",
+    "pants": "pants",
+    "trousers": "trousers",
+    "skirt": "skirt",
+    "jeans": "jeans",
+    "collared shirt": "collared shirt",
+    "long-sleeve shirt": "long-sleeve shirt",
+    "long-sleeve blouse": "long-sleeve blouse",
+    "long-sleeve t-shirt": "long-sleeve t-shirt",
+    "dress shirt": "dress shirt",
+    "jumpsuit": "jumpsuit",
+    "palazzo pants": "palazzo pants",
+    "long skirt": "long skirt",
+}   
 
 # -------------------- FASTAPI --------------------
-app = FastAPI(title="CLIP Clothes Recommender")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # --- STARTUP LOGIC ---
+    print("Server starting: Loading CLIP model...")
+    load_clip_model()
+        
+    yield  # The application runs while this yield is active
+
+# Initialize app with the new lifespan handler
+app = FastAPI(title="CLIP Clothes Recommender", lifespan=lifespan)
 
 # -------------------- GLOBAL RUNTIME --------------------
 model = None
@@ -963,13 +154,8 @@ preprocess = None
 MODEL_LOADED = False
 CACHE_REBUILT = False
 
-INDEX_TOP: List[Dict[str, Any]] = []
-INDEX_BOTTOM: List[Dict[str, Any]] = []
 USER_INDEX: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
 USER_INDEX_BUILT = {}
-
-# Pre-process event rule keys so matching is easier
-CANONICAL_KEYS = list(event_rules.keys())
 
 # -------------------- CLIP HELPERS --------------------
 def load_clip_model():
@@ -1049,16 +235,9 @@ def fetch_all_user_ids() -> List[str]:
 
 def build_index(user_id: str):
     """Build top and bottom index from existing Firestore embeddings."""
-    global INDEX_TOP, INDEX_BOTTOM, INDEX_ONE_PIECE, USER_INDEX_BUILT
-
-    first_time = not USER_INDEX_BUILT.get(user_id)
 
     if USER_INDEX_BUILT.get(user_id):
         return True # Already built, skip
-    
-    INDEX_TOP = []
-    INDEX_BOTTOM = []
-    INDEX_ONE_PIECE = []
 
     docs = fetch_clothes(user_id)
 
@@ -1074,6 +253,9 @@ def build_index(user_id: str):
             "id": d["_id"],
             "name": d.get("name", ""),
             "image_url": d.get("image_url", ""),
+            "category": d.get("category", "").lower(),
+            "piece_type": d.get("piece_type"),
+            "color": d.get("color"),
             "embedding": emb
         }
 
@@ -1084,36 +266,73 @@ def build_index(user_id: str):
         elif d.get("piece_type") == "one_piece":
             USER_INDEX[user_id]["one_piece"].append(entry)
 
-    if first_time:
-        print(f"Index built (first time): {len(INDEX_TOP)} tops, {len(INDEX_BOTTOM)} bottoms")
-
     USER_INDEX_BUILT[user_id] = True
+
+    print(
+        f"Index built for {user_id}: "
+        f"{len(USER_INDEX[user_id]['tops'])} tops, "
+        f"{len(USER_INDEX[user_id]['bottoms'])} bottoms, "
+        f"{len(USER_INDEX[user_id]['one_piece'])} one-piece"
+    )
+
     return True
+    
+def normalize_color(c):
+    return COLOR_NORMALIZATION.get(c, c)
+
+def normalize_ui_color(family: str | None, attributes: List[str]) -> dict:
+    fam = normalize_color(family) if family else None
+
+    attrs = []
+    for a in attributes:
+        if not a:
+            continue
+        a_norm = normalize_color(a)
+        if a_norm and a_norm not in attrs:
+            attrs.append(a_norm)
+
+    return {
+        "family": fam,
+        "attributes": attrs
+    }
+
+def normalize_weather(weather_main: str, temp_c: int) -> str:
+    weather_main = weather_main.lower()
+
+    if "rain" in weather_main or "drizzle" in weather_main or "thunderstorm" in weather_main:
+        return "rainy"
+    
+    if temp_c <= 0:
+        return "freezing"
+
+    if temp_c <= 18:
+        return "cold"
+
+    if temp_c >= 30:
+        return "hot"
+
+    return "normal"
 
 def normalize_event(event: str) -> str:
-    """
-    Since UI restricts event selection,
-    this only ensures consistent formatting.
-    """
     if not event:
         return ""
     return event.lower().strip()
 
 def match_event(user_event: str) -> str:
-    """
-    Directly validate event against EVENT_RULES keys.
-    """
+    """Directly validate event against EVENT_RULES keys."""
     if not user_event:
         return ""
 
     event_key = user_event.lower().strip()
 
-    # Direct match only
     if event_key in event_rules:
         return event_key
 
-    # Safety fallback (should not happen)
     return ""
+
+def normalize_event_category(cat: str) -> str:
+    c = cat.lower().strip()
+    return EVENT_TO_UPLOAD_CATEGORY.get(c, c)
 
 def get_allowed_categories(event_info, style, gender):
     style_map = event_info.get("style_categories", {})
@@ -1126,11 +345,23 @@ def get_allowed_categories(event_info, style, gender):
         "bottom": gender_info.get("bottom", [])
     }
 
-# -------------------- EXTERNAL STORE LINKS --------------------
+def serialize_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove non-JSON fields before API response"""
+    return {
+        "id": item["id"],
+        "name": item["name"],
+        "image_url": item["image_url"],
+        "category": item["category"],
+        "piece_type": item["piece_type"],
+        "color": item["color"]
+    }
+
+
+# --------------Prepare Purchase LINKS --------------------
 def generate_online_links(query: str) -> Dict[str, Any]:
     """
     Generates online shopping links for Shopee, Lazada, Taobao
-    using the query string (e.g., "red dress long baju kurung").
+    using the query string.
     """
     # Simple URL encoding
     import urllib.parse
@@ -1142,8 +373,13 @@ def generate_online_links(query: str) -> Dict[str, Any]:
         "taobao": f"https://world.taobao.com/search/search.htm?q={q_encoded}"
     }
 
-    # Prices/images could be added if you scrape APIs or use official feeds
     return links
+
+def format_links(links, name):
+    return [
+        {"platform": p.capitalize(), "name": name, "price": "Check online", "url": u}
+                for p, u in links.items()
+    ]
 
 # -------------------- API MODELS --------------------
 class UploadItem(BaseModel):
@@ -1153,21 +389,36 @@ class UploadItem(BaseModel):
     category: str
     piece_type: str # top || bottom || one-piece
     user_id: str
+    color_family: str | None = None
+    color_attributes: List[str] = []
+
+class UpdateItem(BaseModel):
+    user_id: str
+    name: str
+    size: str
+    category: str
+    piece_type: str
+    image_url: str
+    color_family: Optional[str] = None
+    color_attributes: List[str] = []
 
 class RecommendRequest(BaseModel):
     user_id: str = ""
     season: str = ""
     weather: str = ""
+    temp: int | None = None
     event: str = ""
     style_preference: str = ""
     gender: str = ""
+    exclude_item_ids: List[str] = []
 
 class RecommendationResult(BaseModel):
+    piece_type: str
     top: Dict[str, Any] | None = None
     bottom: Dict[str, Any] | None = None
     alternative_tops: List[Dict[str, Any]] = []
     alternative_bottoms: List[Dict[str, Any]] = []
-    shoppingSuggestions: List[Dict[str, Any]] = []
+    shoppingSuggestions: Dict[str, List[Dict[str, Any]]] | None
 
 # -------------------- API ROUTES --------------------
 @app.get("/")
@@ -1197,11 +448,18 @@ def upload_item(req: UploadItem):
     if not req.user_id:
         raise HTTPException(400, "user_id is required")
 
+    if not req.color_family and not req.color_attributes:
+        raise HTTPException(
+            status_code=400,
+            detail="Color information (family or attribute) is required"
+        )
+
     load_clip_model()
 
     try:
         img = download_image(req.image_url)
         emb = encode_image(img)
+        color = normalize_ui_color(req.color_family, req.color_attributes)
     except Exception as e:
         raise HTTPException(500, f"Failed to process image: {e}")
 
@@ -1213,19 +471,84 @@ def upload_item(req: UploadItem):
         "image_url": req.image_url,
         "category": req.category.lower(),
         "piece_type": req.piece_type,
+        "color": color,
         "embedding": emb,
         "embedding_version": EMBEDDING_VERSION,
         "created_at": firestore.SERVER_TIMESTAMP
     })
 
+    USER_INDEX_BUILT[req.user_id] = False
     # Update in-memory index
     build_index(req.user_id)
 
-    def clear_user_cache(user_id: str):
-        USER_INDEX_BUILT[user_id] = False
-
     return {"status": "saved", "id": doc_ref.id, "user_id": req.user_id}
 
+@app.put("/items/{item_id}")
+def update_item(item_id: str, req: UpdateItem):
+    """Updates an existing item, re-calculates embedding if needed, and rebuilds index."""
+    
+    doc_ref = db.collection(CLOTHES_COLLECTION).document(item_id)
+    doc_snap = doc_ref.get()
+
+    if not doc_snap.exists:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    existing_data = doc_snap.to_dict()
+    color_data = normalize_ui_color(req.color_family, req.color_attributes)
+
+    if req.image_url != existing_data.get("image_url"):
+        try:
+            load_clip_model()
+            img = download_image(req.image_url)
+            emb = encode_image(img)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to process new image: {e}")
+    else:
+        emb = existing_data.get("embedding")
+
+    update_data = {
+        "name": req.name,
+        "size": req.size,
+        "category": req.category.lower(),
+        "piece_type": req.piece_type,
+        "image_url": req.image_url,
+        "color": color_data,
+        "embedding": emb,
+    }
+    
+    doc_ref.update(update_data)
+
+    USER_INDEX_BUILT[req.user_id] = False
+    try:
+        build_index(req.user_id)
+    except Exception as e:
+        print(f"Warning: Index rebuild failed: {e}")
+
+    return {"status": "updated", "id": item_id}
+
+@app.delete("/items/{item_id}")
+def delete_item(item_id: str):
+    """Deletes an item from Firestore and rebuilds the user's index."""
+    
+    doc_ref = db.collection(CLOTHES_COLLECTION).document(item_id)
+    doc_snap = doc_ref.get()
+
+    if not doc_snap.exists:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    item_data = doc_snap.to_dict()
+    user_id = item_data.get("user_id")
+
+    doc_ref.delete()
+
+    if user_id:
+        USER_INDEX_BUILT[user_id] = False
+        try:
+            build_index(user_id)
+        except Exception as e:
+            print(f"Warning: Failed to rebuild index for user {user_id}: {e}")
+            
+    return {"status": "deleted", "id": item_id}
 
 @app.post("/rebuild_cache/")
 def rebuild_cache():
@@ -1273,13 +596,9 @@ def get_event_rules():
 def recommend(req: RecommendRequest):
     # Ensure the CLIP model and index are loaded
     if not MODEL_LOADED:
-        return RecommendationResult(
-            top=None,
-            bottom=None,
-            alternative_tops=[],
-            alternative_bottoms=[],
-            shoppingSuggestions=[]
-        )
+        print("Model not loaded. Loading now...")
+        load_clip_model()
+
     user_id = req.user_id
     if not user_id:
         raise HTTPException(400, "user_id is required")
@@ -1287,15 +606,27 @@ def recommend(req: RecommendRequest):
     if not USER_INDEX_BUILT.get(user_id):
         build_index(user_id)
 
-    # ------------------ EVENT & STYLE LOGIC ------------------
-    event_key = match_event(req.event)  # match input to event_rules keys
+    # ------------------ EVENT, STYLE & OTHER LOGIC ------------------
+    event_key = match_event(req.event)
     event_info = event_rules.get(event_key, {})
-
+    weather_state = normalize_weather(req.weather, req.temp or 32)
     user_style = (req.style_preference or "").lower().strip()
     gender = (req.gender or "female").lower()
 
+    is_freezing = weather_state == "freezing"
+
     # ------------------ TYPE DETECTION ------------------
-    allowed = get_allowed_categories(event_info, user_style, gender)
+    if is_freezing:
+        allowed = FREEZING_FORCE_CATEGORIES
+    else:
+        allowed = get_allowed_categories(event_info, user_style, gender)
+
+    for k in ("top", "bottom", "one_piece"):
+        allowed[k] = [
+            normalize_event_category(c)
+            for c in allowed.get(k, [])
+            if normalize_event_category(c) in EVENT_TO_UPLOAD_CATEGORY.values()
+        ]
 
     if allowed["one_piece"]:
         detected_type = "one_piece"
@@ -1304,159 +635,275 @@ def recommend(req: RecommendRequest):
     else:
         detected_type = "fallback"
     
-    # ------------------ Randomly choose a category if needed ------------------
+    # ------------------ Choose a category ------------------
     if detected_type == "one_piece":
-        category = random.choice(allowed["one_piece"])
+        category = allowed["one_piece"]
     elif detected_type == "top_bottom":
-        top_cat = random.choice(allowed["top"])
-        bottom_cat = random.choice(allowed["bottom"])
+        top_cat = allowed["top"]
+        bottom_cat = allowed["bottom"]
     else:
         top_cat = bottom_cat = category = None
 
     # ------------------ Select color & style ------------------
     colors = event_info.get("colors", [])
-    chosen_color = random.choice(colors) if colors else ""
+    forbidden_colors = event_info.get("forbidden_colors", [])
+    chosen_color = random.choice(colors) if colors and colors != ["neutral"] else ""
     allowed_styles = event_info.get("allowed_styles", [])
-    chosen_styles = [user_style] if user_style in allowed_styles else ([allowed_styles[0]] if allowed_styles else [])
-
-    # Traditional items for event
-    traditional_map = event_info.get("traditional", {})
-    traditional_items = traditional_map.get(gender, []) if "traditional" in chosen_styles else []
-    trad_item = random.choice(traditional_items) if traditional_items else ""
 
     # ------------------ Prepare Shopping Links ------------------
-    purchase_query = " ".join(filter(None, [chosen_color] + chosen_styles + ([trad_item] if trad_item else []) + 
-                    ([category] if detected_type == "one_piece" else [top_cat, bottom_cat] if detected_type=="top_bottom" else []))) 
-    
-    links_dict = generate_online_links(purchase_query)
+    shopping_suggestions = {
+        "one_piece": [],
+        "top": [],
+        "bottom": [],
+    }
 
-    shopping_suggestions = [ 
-        {"platform": p.capitalize(), "name": purchase_query or "Clothing", 
-         "price": "Check online", "url": u} for p, u in links_dict.items() 
-    ]
-
-    # ------------------ Handle error ------------------
-    user_index = USER_INDEX.get(user_id, {"tops": [], "bottoms": [], "one_piece": []}) 
-    
-    if not user_index["tops"]:
-        return RecommendationResult(
-            top=None, bottom=None,
-            alternative_tops=[], 
-            alternative_bottoms=[], 
-            shoppingSuggestions=shopping_suggestions 
-        ) 
-    
-    if not user_index["bottoms"]:
-        return RecommendationResult(
-            top=None, 
-            bottom=None, 
-            alternative_tops=[], 
-            alternative_bottoms=[], 
-            shoppingSuggestions=shopping_suggestions 
-        )
+    def add_links(cat_list, part_name, color_override=None):
+        if part_name not in shopping_suggestions:
+            return
         
-    if detected_type == "one_piece" and not user_index["one_piece"]:
-        return RecommendationResult(
-            top=None, 
-            bottom=None, 
-            alternative_tops=[], 
-            alternative_bottoms=[], 
-            shoppingSuggestions=shopping_suggestions 
-        )
+        c_name = cat_list[0] if isinstance(cat_list, list) and cat_list else "clothes"
+        
+        search_color = color_override if color_override else chosen_color
+        
+        if weather_state == "freezing":
+            query = f"thermal winter {c_name}"
+        else:
+            query = f"{search_color} {user_style} {c_name}".strip()
+
+        links = generate_online_links(query)
+        
+        shopping_suggestions[part_name] = format_links(links, query)
     
-    if user_style == "traditional" and detected_type != "one_piece":
-        raise HTTPException(400, "Traditional style must use one_piece clothing")
+    # ------------------ Color filter helper ------------------
+    def color_matches(item_color, allowed_colors, forbidden_colors=None):
+        if not item_color or not item_color.get("family"):
+            return not allowed_colors
+
+        family = normalize_color(item_color.get("family"))
+        attributes = item_color.get("attributes", [])
+
+        # ---- Forbidden colors ----
+        if forbidden_colors:
+            for f in forbidden_colors:
+                f = normalize_color(f)
+                if f == family or f in attributes:
+                    return False
+
+        # ---- Allowed colors ----
+        if not allowed_colors:
+            return True
+
+        for c in allowed_colors:
+            c = normalize_color(c)
+            if family in COLOR_FAMILIES.get(c, [c]):
+                return True
+
+        return False
+    
+    def colors_compatible(top, bottom):
+        top_family = normalize_color(top["color"]["family"])
+        bottom_family = normalize_color(bottom["color"]["family"])
+
+        return bottom_family in COLOR_COMPATIBILITY.get(top_family, [])
 
     # ------------------ CLIP query builder ------------------
-    def build_clip_query(item_type, item_category=None):
-        parts = []
-        if req.weather:
-            parts.append(req.weather)
-        if chosen_color:
-            parts.append(chosen_color)
-        parts += chosen_styles
-        if trad_item:
-            parts.append(trad_item)
-        if item_category:
-            parts.append(item_category)
-        return " ".join(parts).strip() or item_type
+    def build_clip_prompt(category: str):
+        """
+        CLIP-safe, visual-only prompt.
+        """
 
-    SIM_THRESHOLD = 0.22 if traditional_items else 0.30
+        base = CLIP_CANONICAL.get(category, category)
+        
+        if weather_state == "freezing":
+            return f"a photo of thermal winter clothing, {base}"
+
+        if user_style == "traditional":
+            return f"a photo of {base}"
+        
+        SLEEVE_KEYWORDS = ["short-sleeve","long-sleeve"]
+        adjectives = []
+        
+        has_intrinsic_sleeve = any(s in base for s in SLEEVE_KEYWORDS)
+
+        for adj in WEATHER_RULES.get(weather_state, []):
+            if adj in SLEEVE_KEYWORDS and has_intrinsic_sleeve:
+                continue    
+            if adj in base:
+                continue
+
+            adjectives.append(adj)
+
+        prefix = " ".join(adjectives).strip()
+
+        if prefix:
+            return f"a photo of {prefix} {base}"
+
+        return f"a photo of {base}"
+
+    SIM_THRESHOLD = 0.12 
+
+    def rank_by_clip(items, prompt):
+        text_vec = encode_text(prompt)
+        scored = [
+            (cosine_similarity(text_vec, i["embedding"]), i)
+            for i in items
+        ]
+        scored.sort(reverse=True, key=lambda x: x[0])
+        return [i for s, i in scored if s >= SIM_THRESHOLD]
 
     # ------------------ Safe find_items helper ------------------
-    def find_items(index_list, allowed_categories, colors, strict=True):
-        if not index_list or not allowed_categories: 
-            return None, [] 
+    def find_items(user_items, allowed_categories, allowed_colors, forbidden_colors=None, exclude_ids=None):
+        if not user_items or not allowed_categories:
+            return None, []
         
-        # Same category + color 
-        for cat in allowed_categories: 
-            for color in colors: 
-                query = build_clip_query("", cat) 
-                if color: 
-                    query = f"{color} {query}"
+        forbidden_colors = forbidden_colors or []
+        exclude_ids = exclude_ids or []
 
-                text_vec = encode_text(query) 
-                scored = [
-                    {"score": cosine_similarity(text_vec, item["embedding"]), "item": item} 
-                    for item in index_list 
-                    if item.get("category") == cat 
-                ]
+        available_items = [i for i in user_items if i["id"] not in exclude_ids]
 
-                matched = [x for x in scored if x["score"] >= SIM_THRESHOLD] 
-                if matched: 
-                    matched.sort(key=lambda x: x["score"], reverse=True) 
-                    return matched[0]["item"], [x["item"] for x in matched[1:4]] 
-        
-        # Same category, different color 
-        for cat in allowed_categories: 
-            query = build_clip_query("", cat) 
-            text_vec = encode_text(query) 
-            scored = [ 
-                {"score": cosine_similarity(text_vec, item["embedding"]), "item": item} 
-                for item in index_list 
-                if item.get("category") == cat 
+        if not available_items:
+            return None, []
+
+        # ---- Try strict match: category + color ----
+        for cat in allowed_categories:
+            prompt = build_clip_prompt(cat)
+            candidates = [
+                i for i in available_items if i["category"] == cat
             ]
+            ranked = rank_by_clip(candidates, prompt)
+            for item in ranked:
+                if color_matches(item.get("color"), allowed_colors, forbidden_colors):
+                    return item, ranked[1:4]
 
-            if scored: 
-                scored.sort(key=lambda x: x["score"], reverse=True) 
-                return scored[0]["item"], [x["item"] for x in scored[1:4]] 
-            
-            # Strict stop (traditional) 
-            if strict: 
-                return None, [] 
-            
-            # Non-strict fallback (casual/general only) 
-            query = build_clip_query("", "") 
-            text_vec = encode_text(query) 
-            scored = [ 
-                {"score": cosine_similarity(text_vec, item["embedding"]), "item": item} 
-                for item in index_list 
+        # ---- Relax color constraint: category only ----            
+        for cat in allowed_categories:
+            prompt = build_clip_prompt(cat)
+            candidates = [
+                i for i in available_items if i["category"] == cat
             ]
+            ranked = rank_by_clip(candidates, prompt)
+            for item in ranked:
+                if color_matches(item.get("color"), allowed_colors=[], forbidden_colors=forbidden_colors):
+                    return item, ranked[1:4]
 
-            scored.sort(key=lambda x: x["score"], reverse=True) 
-            return scored[0]["item"], [x["item"] for x in scored[1:4]]
+        # Failed
+        return None, []
 
-
+    excluded = req.exclude_item_ids
     # ------------------ Generate recommendations ------------------
-    is_traditional = user_style == "traditional"
-
     if detected_type == "one_piece":
-        top, alt_tops = find_items(USER_INDEX[user_id]["one_piece"], allowed["one_piece"], colors, strict=is_traditional)
+        top, alt_tops = find_items(USER_INDEX[user_id]["one_piece"], allowed["one_piece"], colors, forbidden_colors, exclude_ids=excluded)
+
+        if not top:
+            add_links(allowed["one_piece"], "one_piece")
+
+            return RecommendationResult(
+                piece_type=detected_type,
+                top=None, 
+                bottom=None, 
+                alternative_tops=[], 
+                alternative_bottoms=[], 
+                shoppingSuggestions=shopping_suggestions 
+            )
+            
         return RecommendationResult(
-            top=top,
+            piece_type=detected_type,
+            top=serialize_item(top),
             bottom=None,
-            alternative_tops=alt_tops,
+            alternative_tops=[serialize_item(i) for i in alt_tops],
             alternative_bottoms=[],
             shoppingSuggestions=shopping_suggestions
         )
+           
+    if detected_type == "top_bottom":
+        # FIND TOP FIRST
+        top, alt_tops = find_items(USER_INDEX[user_id]["tops"], allowed["top"], colors, forbidden_colors, exclude_ids=excluded)
 
-    top, alt_tops = find_items(USER_INDEX[user_id]["tops"], allowed["top"], colors, strict=False)
-    bottom, alt_bottoms = find_items(USER_INDEX[user_id]["bottoms"], allowed["bottom"], colors, strict=False)
+        if not top:
+            add_links(allowed["top"], "top")
+            
+            bottom_search_color = chosen_color
 
+            if chosen_color:
+                top_fam = normalize_color(chosen_color)
+                
+                compatible_list = COLOR_COMPATIBILITY.get(top_fam, [])
+                
+                valid_options = [c for c in compatible_list if c not in forbidden_colors]
+                
+                if valid_options:
+                     bottom_search_color = valid_options[0]
+
+            # Generate links for BOTTOM using the compatible color
+            add_links(allowed["bottom"], "bottom", color_override=bottom_search_color) 
+
+            return RecommendationResult(
+                piece_type=detected_type,
+                top=None,
+                bottom=None,
+                alternative_tops=[],
+                alternative_bottoms=[],
+                shoppingSuggestions=shopping_suggestions
+            )
+
+        # FIND MATCHING BOTTOM
+        bottom_search_color = chosen_color 
+        
+        if top and top.get("color") and top["color"].get("family"):
+            top_fam = normalize_color(top["color"]["family"])
+            compatible_list = COLOR_COMPATIBILITY.get(top_fam, [])
+            valid_options = [c for c in compatible_list if c not in forbidden_colors]
+            
+            if valid_options:
+                bottom_search_color = valid_options[0]
+
+        if user_style == "traditional":
+            if top["category"] == "kurta":
+                bottom, alt_bottoms = find_items(USER_INDEX[user_id]["bottoms"], ["dhoti", "veshti"], ["white"], forbidden_colors, exclude_ids=excluded)
+            else:
+                bottom, alt_bottoms = find_items(USER_INDEX[user_id]["bottoms"], allowed["bottom"], colors, forbidden_colors, exclude_ids=excluded)
+        else:
+             bottoms = USER_INDEX[user_id]["bottoms"]
+             bottoms = [b for b in bottoms if b["category"] in allowed["bottom"] and b["id"] not in excluded]
+
+             ranked_bottoms = []
+             for cat in allowed["bottom"]:
+                 prompt = build_clip_prompt(cat)
+                 candidates = [b for b in bottoms if b["category"] == cat]
+                 ranked_bottoms.extend(rank_by_clip(candidates, prompt))
+             
+             compatible = [
+                 b for b in ranked_bottoms 
+                 if color_matches(b.get("color"), colors, forbidden_colors) 
+                 and colors_compatible(top, b)
+             ]
+             
+             if not compatible:
+                 compatible = [b for b in ranked_bottoms if colors_compatible(top, b)]
+             
+             if not compatible:
+                 compatible = ranked_bottoms
+
+             bottom = compatible[0] if compatible else None
+             alt_bottoms = compatible[1:4] if compatible else []
+
+        if not bottom:
+            add_links(allowed["bottom"], "bottom", color_override=bottom_search_color)
+
+        return RecommendationResult(
+            piece_type=detected_type,
+            top=serialize_item(top),
+            bottom=serialize_item(bottom) if bottom else None,
+            alternative_tops=[serialize_item(i) for i in alt_tops],
+            alternative_bottoms=[serialize_item(i) for i in alt_bottoms],
+            shoppingSuggestions=shopping_suggestions
+        )
+    
     return RecommendationResult(
-        top=top,
-        bottom=bottom,
-        alternative_tops=alt_tops,
-        alternative_bottoms=alt_bottoms,
+        piece_type="fallback",
+        top=None,
+        bottom=None,
+        alternative_tops=[],
+        alternative_bottoms=[],
         shoppingSuggestions=shopping_suggestions
     )
