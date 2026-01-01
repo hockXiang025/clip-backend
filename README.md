@@ -6,7 +6,7 @@ A python backend for personal outfit recommendation system.
 ## Getting Started
 
 ### 1. Deployment
-* Deploy it on the Google Cloud Run first.
+* Deploy it on the Google Cloud Run to get apiUrl first.
 
 ### 2. Run frontend
-* Then, run the frontend.
+* Then, paste the apiUrl in .env file in frontend, then run it.
